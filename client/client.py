@@ -1,10 +1,11 @@
+import random
 import socket
 import json
-from math import ceil
+import struct
 
-from typing import Dict, List, Union
+from typing import List
 
-from config.consts import SERVER_CONF
+from config.consts import SERVER_CONF, PACKAGE_SIZE
 
 
 class Client:
@@ -13,35 +14,31 @@ class Client:
         self.sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
 
     @staticmethod
-    def __prepare_message(data: dict) -> List[str]:
-        raw_data = json.dumps(data)
+    def __prepare_message(data: str) -> List[bytes]:
         parts = []
-        package_size = 20
-
-        steps = ceil(len(raw_data) / package_size)
-        for i in range(1, steps + 1):
-            if i == steps:
-                parts.append(raw_data[package_size * (i - 1):])
-            else:
-                start = package_size * (i - 1) if i > 1 else 0
-                parts.append(raw_data[start:package_size * i])
+        steps = (len(data) // PACKAGE_SIZE) + 1
+        for i in range(0, steps):
+            start_idx = i * PACKAGE_SIZE if i != 0 else 0
+            part = data[start_idx:PACKAGE_SIZE * (i + 1)]
+            parts.append(part.encode('UTF-8'))
         return parts
 
-    def send_message(self, data: Dict[str, Union[int, float]]) -> None:
+    def send_message(self, data: str, msg_num: int, marker: int) -> None:
+        data = json.dumps(data)
+        header = self.get_header(marker, msg_num, len(data.encode("UTF-8")))
         data_parts = self.__prepare_message(data)
-        for idx, part in enumerate(data_parts):
-            self.send_message_part(part, idx + 1, len(data_parts))
+        package_marker = random.randint(0, 100) # todo Не ясно, в чем разница от цикл. ном. сообщ. ?
 
-    def send_message_part(self, data: str, idx: int, amount: int) -> None:
-        message = {
-            'header': {
-                # 'marker': "",  # todo Маркер ?????
-                # 'num': idx,  # todo Циклический номер сообщения ???(кажется что эти параметры есть в теле)
-                'amount': amount,
-                'num': idx,
-                'size': len(data.encode()),  # Размер блока данных сообщения
-            },
-            'data': data,
-        }
-        message = str.encode(json.dumps(message))
-        self.sock.sendto(message, SERVER_CONF)
+        for idx, part in enumerate(data_parts):
+            package_fields = self.get_package_fields(idx + 1, package_marker, len(data_parts), len(part))
+
+            message = header + package_fields + part
+            self.sock.sendto(message, SERVER_CONF)
+
+    @staticmethod
+    def get_header(marker: int, num: int, size: int) -> bytes:
+        return struct.pack('!III', marker, num, size)
+
+    @staticmethod
+    def get_package_fields(num: int, marker: int, amount: int, size: int):
+        return struct.pack('!IIII', marker, amount, num, size)
